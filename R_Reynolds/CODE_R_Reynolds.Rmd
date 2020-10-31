@@ -1,0 +1,298 @@
+---
+title: "CODE_R_Reynolds"
+author: "CHK"
+date: "24/10/2020"
+output: html_document
+---
+
+
+# Fonctions indicateurs 
+
+```{r}
+gouttes_info <- function(interface){
+  # On met dans l'ordre les coordonnées de l'interface
+  interface <- interface[order(interface[,1]),]
+  # Nombre de points qui séparent deux gouttes
+  n_points <- 150
+  # Coordonnées du haut des gouttes
+  coord <- list("x"=vector(), "y"=vector())
+  # Nombre de gouttes
+  n_gouttes <- 0
+  # Coordonnées des cesures
+  cesures <- vector()
+  # Y a t'il un satellite ? Oui : 1 - Non : 0
+  satellite <- 0
+  # Longueur d'onde : distance entre 2 gouttes avant que le jet ne se   brise
+  long_onde <- NA
+  # Polynome : 5 coeff d'un polynome de degré 4
+  polynome <- rep(NA, 5)
+  # Volume : volume de tout le jet
+  volume <- 0
+  # Surface : surface de tout le jet
+  surface <- 0
+  # Variable = TRUE si on a déjà détecté une cesure entre les 2 gouttes
+  deja <- FALSE
+  if(min(interface[,2])>=0 && max(interface[,2])<=3.5){
+  for(i in 1:nrow(interface)){
+  debut <- max(1, i-n_points)
+  fin <- min(nrow(interface), i+n_points)
+  # Vérifie si on est entre 2 gouttes et non pas au début de l'interface
+  # Normalement cette condition ne sert à rien mais on ne sait jamais
+  if(n_gouttes>0){
+    if((interface[min(nrow(interface),i+1),1]-interface[i,1])>0.3){
+      if(deja == TRUE){
+          satellite <- 1
+      }
+      cesures <- c(cesures, interface[i,1])
+      if(length(cesures)==1){
+        long_onde <- coord$x[length(coord$x)]-coord$x[length(coord$x)-1]
+      }
+      deja <- TRUE
+    }
+  }
+  # Vérifie que le point étudié est bien le sommet d'une goutte
+  if(sum(interface[i,2]<interface[debut:i,2])==0 && sum(interface[i,2]<interface[(i):fin,2])==0){
+    if(length(coord$x)==0){
+      coord$x <- c(coord$x, interface[i,1])
+      coord$y <- c(coord$y, interface[i,2])
+      n_gouttes <- n_gouttes+1
+      deja <- FALSE
+    }
+    else{
+      if(coord$x[length(coord$x)]!=interface[i,1] &&
+      coord$y[length(coord$y)]!=interface[i,2]){
+        coord$x <- c(coord$x, interface[i,1])
+        coord$y <- c(coord$y, interface[i,2])
+        n_gouttes <- n_gouttes+1
+        deja <- FALSE
+      }
+    }
+}
+# Calcule le volume et la surface du jet
+if(i>1){
+x <- interface[(i - 1):i, 1]
+y <- interface[(i - 1):i, 2]
+if(abs(y[1]-y[2])<0.1){
+# volume + (rectangle + triangle) * rayon^2*pi
+volume <- volume + ((x[2]-x[1])*min(y) +
+((x[2]-x[1])*(max(y)-min(y)))/2)*mean(c(min(y), max(y)))^2*pi
+# surface + (moyenne de la surface pour le y le plus haut et le plus faible)*2pi
+surface <- surface + mean((x[2]-x[1])*min(y),
+(x[2]-x[1])*max(y))*2*pi
+}
+}
+}
+polynome <- lm(coord$y~poly(coord$x, degree =4,
+raw=TRUE))$coefficients
+if(is.na(long_onde))
+long_onde <- coord$x[length(coord$x)]-coord$x[max(2,length(coord$x))
+-1]
+}
+return(
+list(
+"coord" = coord,
+"polynome" = polynome,
+"cesures" = cesures,
+"satellite" = satellite,
+"long_onde" = long_onde,
+"volume" = volume,
+"surface" = surface
+)
+)
+}
+
+dist_indiv <- function(d, i, n, n_voisins = 0){
+if(n_voisins==0)
+n_voisins <- n
+j_vect <- c(0,cumsum((n-1):1))
+jb_vect <- c(0,cumsum(1:(n-1)))
+res <- c(0)
+if(i<n){
+j <- (j_vect[i]+1):j_vect[min(i+1,length(j_vect))]
+res <- c(res,d[j[1:min(n_voisins, length(j))]])
+}
+if(i>1){
+jb <- (j_vect[1:(i-1)])
+jb <- jb + (i-1):1
+res <- c(d[jb[max(1,i-n_voisins):length(jb)]], res)
+}
+res
+}
+filtre_gouttes_info <- function(interface){
+interface <- interface[order(interface[,1]),]
+d <- dist(interface)
+j_vect <- which(interface[,2]>quantile(interface[,2], 0.90))
+suppr <- vector()
+for(j in j_vect){
+d_i <- dist_indiv(d, j, nrow(interface), 20)
+if(mean(d_i)>0.60){
+suppr <- c(suppr, j)
+}
+}
+if(length(suppr)>0)
+interface <- interface[-suppr,]
+gouttes <- gouttes_info(interface)
+gouttes$suppr <- suppr
+return(gouttes)
+}
+
+```
+
+
+```{r}
+empty_file = c()
+rep <- "flat_240_350_gnu"
+files <- list.files(rep)
+init <- rep(NA, length(files))
+tableau <- data.frame("Reynolds" = as.integer(substr(files, 1,3)),
+"Amplitude" = as.numeric(substr(files, 5,8)),
+"Temps" = as.numeric(substr(files, 10,14)),
+"Premiere_cesure" = init,
+"nb_cesures" = init,
+"volume" = init,
+"surface" = init,
+"ratio_vs" = init,
+"satellite" = init,
+"long_onde" = init,
+"poly4" = init,
+"poly3" = init,
+"poly2" = init,
+"poly1" = init,
+"poly0" = init)
+i <- 1L
+temps_cum <- 0
+i_prec <- i
+for(i in i:length(files)){
+
+print(i)
+print(paste0(rep,"/",files[i]))
+temps_avant <- Sys.time()
+info <- file.info(paste0(rep,"/",files[i]))
+if (info$size!=0){
+interface <- read.table(paste0(rep,"/",files[i]))
+interface <- interface[order(interface[,1]),1:2]
+gouttes <- filtre_gouttes_info(interface)
+tableau$Premiere_cesure[i] <- if(is.na(gouttes$cesures[1])) interface[nrow(interface),1] else gouttes$cesures[1]
+tableau$nb_cesures[i] <- length(gouttes$cesures)
+tableau$volume[i] <- gouttes$volume
+tableau$surface[i] <- gouttes$surface
+tableau$ratio_vs[i] <- gouttes$surface/gouttes$volume
+tableau$satellite[i] <- gouttes$satellite
+tableau$long_onde[i] <- gouttes$long_onde
+tableau$poly0[i] <- as.numeric(gouttes$polynome[1])
+tableau$poly1[i] <- as.numeric(gouttes$polynome[2])
+tableau$poly2[i] <- as.numeric(gouttes$polynome[3])
+tableau$poly3[i] <- as.numeric(gouttes$polynome[4])
+tableau$poly4[i] <- as.numeric(gouttes$polynome[5])
+# plot(interface, cex = 0.2, asp = 3, main = files[i], ylim = c(-3.5,3.5))
+# points(interface[,1], -interface[,2], cex=0.2)
+
+loading = 0
+if(loading<trunc((i*100)/length(files))){
+write.csv2(tableau, "tableau_final.csv", row.names = FALSE)
+print("Sauvé")
+}
+temps_cum <- difftime(Sys.time(), temps_avant, units = "hours") + temps_cum
+loading <- (i*100)/length(files)
+reste <- temps_cum/(((i-i_prec+1)*100)/length(files))*(100-loading)
+cat(paste0("\r",sprintf('%.3f',loading),"%
+-
+",
+trunc(reste), "h"), round((reste-trunc(reste))*60), "min -
+",
+i-nrow(na.omit(tableau)), "NA's")
+}
+else{
+  empty_file = c(empty_file,paste0(rep,"/",files[i]))
+}
+}
+```
+
+```{r}
+dataR<-read.csv2("C:/Users/Lisa/Documents/M1_SSD/Projet_tut/Rheology_Project/REG1/
+tableau1.csv", header = TRUE)
+dataR <- na.omit(dataR)
+summary(dataR)
+set.seed(22071997)
+idTrain <-sample(1:nrow(dataR),round(nrow(dataR)*0.8),replace=F)
+Train <-dataR[idTrain,]
+Test <-dataR[-idTrain,]
+```
+```{r fig.cap="Modèle linéaire", echo=FALSE}
+R.lm <- lm(Reynolds.,Train)
+R.lm <- step(R.lm,direction="both")
+summary(R.lm)
+```
+```{r echo=FALSE, fig.width=12}
+Ypred <- predict(R.lm,Test[,-1])
+Ytest <- Test$Reynolds
+plot(Ypred,Ytest,xlab="Prediction",ylab="Observation")
+title(main="Prédiction Reynolds jeu de test :\n Amplitude de 0.01 à 0.15 /
+Reynolds de 100 à 900", line = 0.19)
+abline(0,1,col="blue")
+```
+
+```{r echo=FALSE}
+(MAE <-mean(abs(Ypred-Ytest)))
+```
+
+```{r echo=FALSE, fig.width=12}
+dataOut <- data.frame(rep(NA,length(Ytest)),(rep(NA,length(Ytest))),rep(NA,
+length(Ytest)))
+colnames(dataOut) <- c("Index","Ytest","Ypred")
+for (i in 1:length(Ytest)) {
+if (Ytest[i] > 0 && Ypred[i] <800) {
+if (Ytest[i]>(Ypred[i]+MAE)){
+dataOut[i,1] <- names(Ypred)[i]
+dataOut[i,2] <- Ytest[i]
+dataOut[i,3] <- Ypred[i]
+}
+}
+if (Ytest[i]<(Ypred[i]-MAE)){
+dataOut[i,1] <- names(Ypred)[i]
+dataOut[i,2] <- Ytest[i]
+dataOut[i,3] <- Ypred[i]
+}
+}
+dataOut <- na.omit(dataOut)
+par(mfrow=c(1,2))
+couleur <- c(rep("darkolivegreen2",length(Ytest)))
+couleur[as.numeric(row.names(dataOut))] <- "grey"
+plot(Ypred,Ytest,col=couleur,xlab="Prediction",ylab="Observation")
+title(main="Prédiction Reynolds jeu de test :\n Amplitude de 0.01 à 0.15 /
+Reynolds de 100 à 900", line=0.19)
+lines((Ytest-MAE),Ytest, lty = 5, col = "red",type="l")
+lines((Ytest+MAE),Ytest, lty = 5, col = "red",type="l")
+legend("bottomright", legend="intervalle MAE",col="red", lty=2, cex=0.8)
+abline(0,1,col="black")
+couleur <- Test$Amplitude*100
+plot(Ypred,Ytest,xlab="Prediction",ylab="Observation",col=rainbow(15)
+[Test$Amplitude*100])
+title(main="Prédiction Reynolds jeu de test :\n Amplitude de 0.01 à 0.15
+/ Reynolds de 100 à 900", line=0.19)
+legend("bottomright",c(paste0("Amplitude=0.0",1:9),
+paste0("Amplitude=0.",10:15)),fill=rainbow(15),cex = 0.6)
+abline(0,1,col="black")
+```
+
+```{r echo=FALSE}
+Ypred <- predict(R.lm,Test[,-1])
+Ytest <- Test$Reynolds
+g <- 22071997
+E1 <- rep(0,20)
+for (i in 1:20) {
+set.seed(g)
+g <- g+10
+idTrain <-sample(1:nrow(dataR),round(nrow(dataR)*0.8),replace=F)
+Train <-dataR[idTrain,]
+Test <-dataR[-idTrain,]
+R.lm <- lm(Reynolds.,Train)
+R.lm <- step(R.lm,direction="both")
+Ypred <- predict(R.lm,Test[,-1])
+Ytest <- Test$Reynolds
+E1[i] <- mean(abs(Ypred-Ytest))
+}
+(MAE <- (mean(E1)))
+```
+
+
